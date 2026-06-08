@@ -13,6 +13,12 @@ const GLYPH: Record<PieceType, string> = {
   pawn: "♟",
 };
 
+// Text variation selector (U+FE0E). iOS Safari otherwise gives the black pawn
+// (U+265F) emoji presentation, so it renders glossy and oversized while the
+// other glyphs stay flat text. Appending this forces text presentation; it is a
+// no-op on glyphs that already render as text.
+const TEXT_PRESENTATION = "\uFE0E";
+
 export function PieceGlyph({
   type,
   color,
@@ -30,7 +36,7 @@ export function PieceGlyph({
           color === "white" ? "1.25px rgba(0,0,0,0.7)" : "1px rgba(255,255,255,0.35)",
       }}
     >
-      {GLYPH[type]}
+      {GLYPH[type] + TEXT_PRESENTATION}
     </span>
   );
 }
