@@ -80,12 +80,17 @@ function isSquare(n: number): boolean {
   return Number.isInteger(n) && n >= 0 && n < NUM_SQUARES;
 }
 
-export type GameOverReason = "kingCaptured" | "infiniteLoop";
+// A finished game is either a win (a king was captured twice) or a draw (a chain
+// reproduced a configuration — an infinite loop). The two shapes are kept
+// distinct so a draw never has to overload `winner`.
+export type Outcome =
+  | { result: "win"; winner: Color; reason: "kingCaptured" }
+  | { result: "draw"; reason: "infiniteLoop" };
 
 export type Phase =
   | { kind: "awaitingMove" }
   | { kind: "awaitingPlacement"; pending: PendingPlacement }
-  | { kind: "gameOver"; winner: Color; reason: GameOverReason };
+  | { kind: "gameOver"; outcome: Outcome };
 
 export interface GameState {
   boards: [Board, Board];
@@ -129,7 +134,7 @@ function cellChar(cell: Piece | null): string {
 // single chain: both boards, the king counters, the side to move, and the piece
 // about to be placed (with its destination board). If a placement reproduces a
 // signature already seen in this chain, the chain can never terminate => the
-// triggering player wins (infinite loop).
+// game is a draw (infinite loop).
 function chainSignature(
   boards: [Board, Board],
   kingCaptures: { white: number; black: number },
@@ -248,7 +253,10 @@ export function applyMove(state: GameState, move: Move): GameState {
         boards,
         turn: state.turn,
         kingCaptures,
-        phase: { kind: "gameOver", winner: opponent(captured.color), reason: "kingCaptured" },
+        phase: {
+          kind: "gameOver",
+          outcome: { result: "win", winner: opponent(captured.color), reason: "kingCaptured" },
+        },
       };
     }
   }
@@ -311,7 +319,10 @@ export function applyPlacement(state: GameState, square: number): GameState {
         boards,
         turn: state.turn,
         kingCaptures,
-        phase: { kind: "gameOver", winner: opponent(occupant.color), reason: "kingCaptured" },
+        phase: {
+          kind: "gameOver",
+          outcome: { result: "win", winner: opponent(occupant.color), reason: "kingCaptured" },
+        },
       };
     }
   }
@@ -325,19 +336,20 @@ export function applyPlacement(state: GameState, square: number): GameState {
   const signature = chainSignature(boards, kingCaptures, state.turn, nextPending);
   if (nextPending.visited.includes(signature)) {
     // This placement reproduces a configuration already seen this chain: the
-    // chain cannot terminate. The triggering (active) player wins.
+    // chain can never terminate. Per Nil, an infinite loop is a DRAW (PROMPT §2
+    // says the trigger wins; Nil overrode this to "equivalent to stalemate").
     return {
       boards,
       turn: state.turn,
       kingCaptures,
-      phase: { kind: "gameOver", winner: state.turn, reason: "infiniteLoop" },
+      phase: { kind: "gameOver", outcome: { result: "draw", reason: "infiniteLoop" } },
     };
   }
   nextPending.visited.push(signature);
 
   if (nextPending.visited.length > MAX_CHAIN_ITERATIONS) {
     // Unreachable in correct play — loop detection should have fired. Assert
-    // rather than declare a winner so a signature bug cannot be masked.
+    // rather than declare an outcome so a signature bug cannot be masked.
     throw new Error(
       `chain exceeded MAX_CHAIN_ITERATIONS=${MAX_CHAIN_ITERATIONS} without loop detection — likely a chainSignature bug`,
     );

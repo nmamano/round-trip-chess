@@ -13,8 +13,9 @@ to do next.
 
 ## 0. Current status (what exists)
 
-- Commit `339bfbb` on `master`: the pure `shared/` rules engine + tests.
-- `bun run ci` is **green**: prettier + eslint + tsc + 46 tests / 335 assertions.
+- On `master` (see `git log`): the pure `shared/` rules engine + tests, with
+  infinite-loop scored as a **draw** (see §2.3).
+- `bun run ci` is **green**: prettier + eslint + tsc + 46 tests / 334 assertions.
 - Run it: `cd ~/nil/round-trip-chess && bun install && bun run ci`.
 
 Files:
@@ -53,8 +54,12 @@ GameState = {
   phase:
     | { kind: "awaitingMove" }
     | { kind: "awaitingPlacement"; pending: { piece, board, visited } }
-    | { kind: "gameOver"; winner: Color; reason: "kingCaptured" | "infiniteLoop" };
+    | { kind: "gameOver"; outcome: Outcome };
 }
+
+Outcome =
+  | { result: "win"; winner: Color; reason: "kingCaptured" }
+  | { result: "draw"; reason: "infiniteLoop" };
 ```
 
 Errors: `IllegalMoveError` (`WRONG_PHASE | INVALID_BOARD | INVALID_SQUARE |
@@ -78,13 +83,14 @@ projected into the client-facing snapshot.
    move or chain placement). Reaching 2 ⇒ game over, winner = opponent(C).
    **Self-capturing your own king to its 2nd capture loses** — confirmed correct
    (counter-intuitive but intentional; tested).
-3. **Infinite loop ⇒ the triggering (active) player WINS** (PROMPT §2). Detected
-   by configuration-repeat within a single chain (signature = both boards + king
-   counters + side-to-move + pending piece/board), seeded with the first chain
-   config. Hard iteration cap **asserts** (throws) rather than declaring a winner.
-   ⚠️ OPEN: Nil described the loop case as "equivalent to stalemate." The engine
-   currently scores it as a WIN for the trigger (per PROMPT §2). Confirm with Nil
-   whether to keep win or change to draw before relying on it.
+3. **Infinite loop ⇒ DRAW** (Nil's ruling — "equivalent to stalemate"; this
+   overrides PROMPT §2's "trigger wins"). Detected by configuration-repeat within
+   a single chain (signature = both boards + king counters + side-to-move +
+   pending piece/board), seeded with the first chain config. Hard iteration cap
+   **asserts** (throws) rather than declaring an outcome. Modeled with a dedicated
+   draw shape: `gameOver` carries an `Outcome`, and a draw is `{ result: "draw";
+reason: "infiniteLoop" }` — never overloading `winner`. (PROMPT §2 still reads
+   "trigger wins"; it is owned by Nil and left as-authored — this chat ruling wins.)
 4. **No-legal-move / passing:** effectively unreachable in this variant (a king
    can almost always capture or step); not specially handled — `legalMovesFrom`
    just returns `[]`. The real terminal edge is the infinite loop above.
@@ -182,13 +188,16 @@ Mirror `~/nil/rps-roulette` (READ-ONLY reference — do not modify it):
   layout, `Current Turn`, king status (Safe / 1× / 2×), New Game, win banner
   `🎉 WHITE WINS! 🎉`, rules panel (copy verbatim from PROMPT §6), reconnect,
   don't-break-on-mobile (stack the boards).
-  - **Board rendering choice (Nil to confirm at this step):** keep the board a
-    pure projection of `RoomSnapshot` behind a thin `<Board snapshot onIntent>`
-    wrapper so library-vs-hand-roll stays a swappable detail. Options: hand-roll
-    (CSS grid + Unicode glyphs) for the tracer bullet; optionally **chessground**
-    (lichess's renderer — prettiest, great highlight API for the placement picker)
-    for the polished pass. Whatever you pick, use it as a DUMB renderer — never
-    let a library enforce chess rules (would fight the variant).
+  - **Board rendering (Nil: "whatever works best" — driver's call).** Keep the
+    board a pure projection of `RoomSnapshot` behind a thin
+    `<Board snapshot onIntent>` wrapper so the choice stays a swappable detail.
+    Reasonable path: hand-roll (CSS grid + Unicode glyphs) for the tracer bullet;
+    optionally **chessground** (lichess's renderer — prettiest, great highlight
+    API for the placement picker) for the polished pass. **Hard constraint:**
+    whatever you pick, use it as a DUMB renderer — never let a library enforce
+    chess rules (it would fight the variant).
+  - **Endgame banner:** games can end in a **win** (`🎉 WHITE/BLACK WINS! 🎉`) OR
+    a **draw** (infinite loop). Render both from `Outcome.result`.
 - `Dockerfile` + `fly.toml` (single machine, `min_machines_running = 1`, no
   autoscale — in-memory state). `bun run ci` green. `fly deploy`, app slug
   `round-trip-chess`. Then play a real match across two devices.
@@ -227,11 +236,10 @@ increments staging only your own changes; do NOT modify `~/nil/rps-roulette`.
 
 ## 8. Open questions to confirm with Nil before/while building §3
 
-1. Infinite loop = **win for trigger** (current/PROMPT §2) vs **draw**
-   ("equivalent to stalemate")? — reconcile before relying on it. ⚠️ If Nil
-   chooses draw, `GameOverReason` + `Phase` need a dedicated **draw shape** (don't
-   overload `winner`); settle this BEFORE the protocol/snapshot locks in.
-2. **Stateless castling** (position-keyed, no move history) — acceptable, matching
+_Resolved by Nil: infinite loop = **draw** (implemented, §2.3); board library =
+**whatever works best** (driver's call, §5)._
+
+1. **Stateless castling** (position-keyed, no move history) — acceptable, matching
    the pawn double-step precedent? (Reviewer: yes.)
-3. **Promotion** — atomic `move.promotion` (reviewer-recommended) vs an explicit
+2. **Promotion** — atomic `move.promotion` (reviewer-recommended) vs an explicit
    `awaitingPromotion` phase; confirm the piece-choice UX with two boards.

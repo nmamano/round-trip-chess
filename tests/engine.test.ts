@@ -29,6 +29,18 @@ function asGameOver(state: GameState) {
   return state.phase;
 }
 
+function asWin(state: GameState) {
+  const outcome = asGameOver(state).outcome;
+  if (outcome.result !== "win") throw new Error(`expected win, got ${outcome.result}`);
+  return outcome;
+}
+
+function asDraw(state: GameState) {
+  const outcome = asGameOver(state).outcome;
+  if (outcome.result !== "draw") throw new Error(`expected draw, got ${outcome.result}`);
+  return outcome;
+}
+
 function expectMoveError(fn: () => unknown, code: string) {
   try {
     fn();
@@ -253,9 +265,9 @@ describe("king capture via a normal move", () => {
       from: sq("e1"),
       to: sq("e8"),
     });
-    const phase = asGameOver(s);
-    expect(phase.winner).toBe("white");
-    expect(phase.reason).toBe("kingCaptured");
+    const win = asWin(s);
+    expect(win.winner).toBe("white");
+    expect(win.reason).toBe("kingCaptured");
     expect(s.kingCaptures.black).toBe(2);
   });
 });
@@ -288,9 +300,9 @@ describe("king capture via a chain placement", () => {
   test("second capture via placement ends the game immediately", () => {
     let s = setup({ white: 0, black: 1 });
     s = applyPlacement(s, sq("a8"));
-    const phase = asGameOver(s);
-    expect(phase.winner).toBe("white");
-    expect(phase.reason).toBe("kingCaptured");
+    const win = asWin(s);
+    expect(win.winner).toBe("white");
+    expect(win.reason).toBe("kingCaptured");
     expect(s.kingCaptures.black).toBe(2);
   });
 
@@ -306,15 +318,15 @@ describe("king capture via a chain placement", () => {
       to: sq("a4"),
     });
     s = applyPlacement(s, sq("a8")); // captures own king -> white reaches 2
-    const phase = asGameOver(s);
+    const win = asWin(s);
     expect(s.kingCaptures.white).toBe(2);
-    expect(phase.winner).toBe("black"); // opponent of the doomed king wins
-    expect(phase.reason).toBe("kingCaptured");
+    expect(win.winner).toBe("black"); // opponent of the doomed king wins
+    expect(win.reason).toBe("kingCaptured");
   });
 });
 
 describe("infinite-loop detection", () => {
-  test("a chain that reproduces a configuration ends with the triggering player winning", () => {
+  test("a chain that reproduces a configuration ends in a draw (Nil: loop == stalemate)", () => {
     const boards = emptyBoards();
     put(boards[0], "d8", pc("white", "rook"));
     put(boards[0], "d4", pc("black", "rook")); // captured to start the chain
@@ -328,9 +340,8 @@ describe("infinite-loop detection", () => {
     expect(s.phase.kind).toBe("awaitingPlacement");
 
     s = applyPlacement(s, sq("a8")); // step 2: reproduces the initial chain config
-    const phase = asGameOver(s);
-    expect(phase.reason).toBe("infiniteLoop");
-    expect(phase.winner).toBe("white"); // the player resolving the chain
+    const draw = asDraw(s);
+    expect(draw.reason).toBe("infiniteLoop");
   });
 });
 
