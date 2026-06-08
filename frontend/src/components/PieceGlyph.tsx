@@ -30,7 +30,14 @@ export function PieceGlyph({
 }) {
   return (
     <span
-      className={cn(color === "white" ? "text-white" : "text-neutral-900", className)}
+      className={cn(
+        color === "white" ? "text-white" : "text-neutral-900",
+        // iOS/touch text-style chess glyphs render descent-heavy and sit low in
+        // the cell. Nudge up on coarse-pointer devices so they optically center;
+        // desktop (fine pointer) is left untouched.
+        "pointer-coarse:-translate-y-[8%]",
+        className,
+      )}
       style={{
         WebkitTextStroke:
           color === "white" ? "1.25px rgba(0,0,0,0.7)" : "1px rgba(255,255,255,0.35)",
