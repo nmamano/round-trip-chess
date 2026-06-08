@@ -104,26 +104,47 @@ intentionally omitted from the first slice. Treat this as a fresh design round:
 coding** (see §6), confirm the open questions with Nil, then implement engine-first
 with exhaustive tests, same as the first slice.
 
-Proposed designs (starting point — confirm, don't assume):
+Proposed designs below have already been **reviewed by Game Reviewer** (early
+design pass); they are the recommended starting point. Still send the concrete
+plan back to the reviewer before coding and confirm the Nil-facing items in §8.
 
-- **Castling (no-check variant).** There is no check here, so drop the "not
-  through/into check" rule entirely. Propose **stateless castling** keyed on
-  position (king on e-home + chosen rook on a-/h-home + squares between empty),
-  consistent with the stateless pawn double-step Nil endorsed (a piece back on
-  its home square regains its privilege). This avoids tracking castling rights.
-  Encode as a king move of two squares from home (`Move` shape unchanged);
-  `applyMove` also relocates the rook. Per board, per side. CONFIRM with Nil that
-  stateless (vs move-history) castling is acceptable.
-- **En passant.** Add `enPassant: { board, square } | null` to `GameState`, set
-  after a pawn double-step, cleared after the next ply. Same-board only. An EP
-  capture removes a pawn on a different square than the destination, and that
-  captured pawn then goes through the normal placement/chain mechanic.
-- **Promotion.** A pawn reaching the last rank (white→8, black→1) promotes.
-  Add an `awaitingPromotion` sub-phase (or `move.promotion?: PieceType`):
-  resolve the promotion choice FIRST, then any capture's placement/chain.
-  Pawns are only ever PLACED on rank 2/7, so placement never auto-promotes —
-  promotion happens only via forward/diagonal movement, and on EITHER board.
-  CONFIRM the promotion-vs-placement ordering and the piece-choice UX with Nil.
+- **Castling (no-check variant) — stateless.** Consistent with Nil's stateless
+  pawn-double-step ruling, define it strictly as: king of the side-to-move on its
+  home square (e1/e8), a **same-color** rook on its a/h home square **on the same
+  board**, all intervening squares empty → king moves two squares, rook relocates.
+  **No check / through-check / into-check rules. No capture by castling.** Because
+  placement can recreate home positions, castling rights intentionally revive — no
+  move-history/rights tracking. Encode as a king move of two squares from home
+  (`Move` shape unchanged); `applyMove` also relocates the rook.
+  Test matrix: both boards × both colors × king-/queen-side; blocked path;
+  missing/wrong-color rook; and **revived castling after pieces are placed back**.
+- **En passant.** Add `enPassant: { board, square, pawnSquare } | null` to
+  `GameState` (store both the EP target square AND the captured pawn's square for
+  validation clarity). Set **only** by a normal pawn double-step, **never** by
+  placement; clear it when the opponent's next normal move successfully applies.
+  Same-board only. An EP capture removes the pawn at `pawnSquare` (≠ destination),
+  and that captured pawn enters the normal placement/chain mechanic on the other
+  board. Invariant: `enPassant` should already be `null` during any
+  `awaitingPlacement` chain — assert/test that; if it ever can co-exist with a
+  chain, it MUST be added to `chainSignature` (the signature must represent full
+  config).
+- **Promotion — atomic on the move (recommended).** Add
+  `move.promotion?: Exclude<PieceType, "pawn" | "king">` and resolve it **inside
+  `applyMove`**, not via a separate phase. The UI prompts before sending the move.
+  - Non-capturing promotion: move + promote, flip turn.
+  - Promoting capture: move pawn, apply the chosen promotion immediately,
+    increment the king counter if a king was captured, then if the move captured
+    anything enter `awaitingPlacement` for the captured piece.
+    This avoids a transient state where a pawn has moved/captured but the captured
+    piece can't yet be placed, and keeps the server command model simpler. Pawns are
+    only ever PLACED on rank 2/7, so placement never auto-promotes; promotion is via
+    forward/diagonal movement only, on EITHER board.
+  - _Alternative (only if product UX requires post-move selection):_ an explicit
+    `awaitingPromotion` phase. It must carry enough frozen data to avoid
+    recomputing the move: boards-after-move-with-unresolved-pawn, the captured
+    piece (if any), `kingCaptures` after the capture event, and the next placement
+    target board. More state to serialize/test — prefer the atomic form unless Nil
+    asks otherwise.
 
 Each feature: extend `shared/movement.ts` / `shared/engine.ts`, add truth-table
 and scenario tests, keep `bun run ci` green.
@@ -207,8 +228,10 @@ increments staging only your own changes; do NOT modify `~/nil/rps-roulette`.
 ## 8. Open questions to confirm with Nil before/while building §3
 
 1. Infinite loop = **win for trigger** (current/PROMPT §2) vs **draw**
-   ("equivalent to stalemate")? — reconcile before relying on it.
+   ("equivalent to stalemate")? — reconcile before relying on it. ⚠️ If Nil
+   chooses draw, `GameOverReason` + `Phase` need a dedicated **draw shape** (don't
+   overload `winner`); settle this BEFORE the protocol/snapshot locks in.
 2. **Stateless castling** (position-keyed, no move history) — acceptable, matching
-   the pawn double-step precedent?
-3. **Promotion** ordering (promote then resolve capture placement) and the
-   piece-choice UX with two boards?
+   the pawn double-step precedent? (Reviewer: yes.)
+3. **Promotion** — atomic `move.promotion` (reviewer-recommended) vs an explicit
+   `awaitingPromotion` phase; confirm the piece-choice UX with two boards.
