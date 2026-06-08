@@ -254,7 +254,9 @@ export function Game({
           over && over.result === "win" && over.winner === myColor && "border-win/60 bg-win/10",
           over && over.result === "win" && over.winner !== myColor && "border-lose/60 bg-lose/10",
           over && over.result === "draw" && "border-border bg-muted",
-          !over && "border-border bg-card",
+          // Subtle highlight when it's your turn to act, so the box draws the eye.
+          !over && isMyTurn && "border-primary bg-primary/10",
+          !over && !isMyTurn && "border-border bg-card",
         )}
       >
         {banner ? (
