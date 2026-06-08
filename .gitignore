@@ -1,0 +1,17 @@
+# deps
+node_modules/
+
+# build output
+dist/
+frontend/dist/
+
+# env
+.env
+.env.*
+
+# misc
+.cache/
+.eslintcache
+logs/
+*.log
+.DS_Store
