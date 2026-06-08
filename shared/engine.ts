@@ -13,7 +13,16 @@
 // turn does NOT flip until the chain ends on an empty square.
 
 import type { Board, BoardId, Color, Piece, PieceType } from "./board";
-import { STARTING_SQUARES, cloneBoard, emptyBoard, initialBoard, squareToAlgebraic } from "./board";
+import {
+  STARTING_SQUARES,
+  cloneBoard,
+  emptyBoard,
+  fileOf,
+  idx,
+  initialBoard,
+  rankOf,
+  squareToAlgebraic,
+} from "./board";
 import { MAX_CHAIN_ITERATIONS, NUM_SQUARES } from "./config";
 import { legalDestinations } from "./movement";
 
@@ -28,7 +37,8 @@ export type IllegalMoveCode =
   | "INVALID_SQUARE"
   | "NO_PIECE"
   | "WRONG_OWNER"
-  | "ILLEGAL_DESTINATION";
+  | "ILLEGAL_DESTINATION"
+  | "INVALID_PROMOTION";
 export type IllegalPlacementCode = "WRONG_PHASE" | "INVALID_SQUARE" | "ILLEGAL_SQUARE";
 
 export class IllegalMoveError extends Error {
@@ -53,10 +63,35 @@ export class IllegalPlacementError extends Error {
 // State model
 // ---------------------------------------------------------------------------
 
+// A pawn reaching the last rank promotes atomically as part of the move (no
+// separate phase): the UI picks the piece and sends it on the move. King/pawn are
+// excluded targets.
+export type PromotionPiece = Exclude<PieceType, "pawn" | "king">;
+
+// Ordered queen-first (the conventional default) so any consumer that takes the
+// first option — or renders them in order — leads with the strongest piece.
+const PROMOTABLE: PromotionPiece[] = ["queen", "rook", "bishop", "knight"];
+
+function isPromotionPiece(p: unknown): p is PromotionPiece {
+  return p === "knight" || p === "bishop" || p === "rook" || p === "queen";
+}
+
 export interface Move {
   board: BoardId;
   from: number;
   to: number;
+  // Required iff this move lands a pawn on its last rank; rejected otherwise.
+  promotion?: PromotionPiece;
+}
+
+// En-passant right, carried on GameState. Set ONLY by a pawn double-step and
+// consumed/cleared by the very next move. `square` is the capture target (the
+// square the double-stepped pawn passed over); `pawnSquare` is where that pawn
+// now sits and is the cell actually emptied by an en-passant capture.
+export interface EnPassant {
+  board: BoardId;
+  square: number;
+  pawnSquare: number;
 }
 
 export interface PendingPlacement {
@@ -96,6 +131,10 @@ export interface GameState {
   boards: [Board, Board];
   turn: Color;
   kingCaptures: { white: number; black: number };
+  // The en-passant right available to the side to move, or null. Always null while
+  // a placement chain is in flight (a double-step never captures), so it is NOT
+  // part of `chainSignature`; `applyPlacement` asserts this invariant.
+  enPassant: EnPassant | null;
   phase: Phase;
 }
 
@@ -156,8 +195,20 @@ export function initialState(): GameState {
     boards: [initialBoard(), emptyBoard()],
     turn: "white",
     kingCaptures: { white: 0, black: 0 },
+    enPassant: null,
     phase: { kind: "awaitingMove" },
   };
+}
+
+// The en-passant target square for `board`, or null — board-filtered so movement
+// generation only ever sees a same-board square.
+function epTargetFor(state: GameState, board: BoardId): number | null {
+  return state.enPassant && state.enPassant.board === board ? state.enPassant.square : null;
+}
+
+// The last rank a pawn of `color` promotes on (white rank 8 / black rank 1).
+function promotionRank(color: Color): number {
+  return color === "white" ? 7 : 0;
 }
 
 // Legal destinations for the piece on `from`, but only for the side to move and
@@ -167,7 +218,7 @@ export function legalMovesFrom(state: GameState, board: BoardId, from: number): 
   if (state.phase.kind !== "awaitingMove") return [];
   const piece = state.boards[board][from];
   if (!piece || piece.color !== state.turn) return [];
-  return legalDestinations(state.boards[board], from);
+  return legalDestinations(state.boards[board], from, epTargetFor(state, board));
 }
 
 // Every legal move for the side to move across both boards. Useful for a
@@ -177,10 +228,20 @@ export function allLegalMoves(state: GameState): Move[] {
   const moves: Move[] = [];
   for (const board of [0, 1] as BoardId[]) {
     const cells = state.boards[board];
+    const epTarget = epTargetFor(state, board);
     for (let from = 0; from < cells.length; from++) {
       const piece = cells[from];
       if (!piece || piece.color !== state.turn) continue;
-      for (const to of legalDestinations(cells, from)) moves.push({ board, from, to });
+      for (const to of legalDestinations(cells, from, epTarget)) {
+        // A pawn reaching its last rank must promote: expand into one Move per
+        // promotion target so a random-legal bot never emits an illegal
+        // promotionless move.
+        if (piece.type === "pawn" && rankOf(to) === promotionRank(piece.color)) {
+          for (const promotion of PROMOTABLE) moves.push({ board, from, to, promotion });
+        } else {
+          moves.push({ board, from, to });
+        }
+      }
     }
   }
   return moves;
@@ -192,6 +253,137 @@ export function allLegalMoves(state: GameState): Move[] {
 export function placementOptions(state: GameState): number[] {
   if (state.phase.kind !== "awaitingPlacement") return [];
   return placementSquares(state.phase.pending.piece).slice();
+}
+
+// Shared tail for every capture path (normal, en-passant, promoting capture): the
+// king-win check, then enter the placement chain seeded with the first config.
+// `enPassant` is always cleared here — a capture never leaves a dangling EP right.
+function enterCaptureResolution(
+  turn: Color,
+  boards: [Board, Board],
+  priorKingCaptures: { white: number; black: number },
+  captureBoard: BoardId,
+  captured: Piece,
+): GameState {
+  const kingCaptures = { ...priorKingCaptures };
+  if (captured.type === "king") {
+    kingCaptures[captured.color] += 1;
+    if (kingCaptures[captured.color] >= 2) {
+      return {
+        boards,
+        turn,
+        kingCaptures,
+        enPassant: null,
+        phase: {
+          kind: "gameOver",
+          outcome: { result: "win", winner: opponent(captured.color), reason: "kingCaptured" },
+        },
+      };
+    }
+  }
+
+  const pending: PendingPlacement = {
+    piece: { type: captured.type, color: captured.color },
+    board: otherBoard(captureBoard),
+    visited: [],
+  };
+  pending.visited.push(chainSignature(boards, kingCaptures, turn, pending));
+
+  return {
+    boards,
+    turn,
+    kingCaptures,
+    enPassant: null,
+    phase: { kind: "awaitingPlacement", pending },
+  };
+}
+
+// Castling (no-check variant): king already validated as a two-square home move.
+// Relocates the rook to the square the king crossed; never captures.
+function applyCastle(
+  state: GameState,
+  board: BoardId,
+  from: number,
+  to: number,
+  color: Color,
+): GameState {
+  const backRank = color === "white" ? 0 : 7;
+  const kingside = fileOf(to) > fileOf(from); // king -> g (file 6) vs c (file 2)
+  const rookFrom = idx(kingside ? 7 : 0, backRank);
+  const rookTo = idx(kingside ? 5 : 3, backRank);
+
+  const boards = cloneBoards(state);
+  boards[board][to] = boards[board][from];
+  boards[board][from] = null;
+  boards[board][rookTo] = boards[board][rookFrom];
+  boards[board][rookFrom] = null;
+
+  return {
+    boards,
+    turn: opponent(state.turn),
+    kingCaptures: { ...state.kingCaptures },
+    enPassant: null,
+    phase: { kind: "awaitingMove" },
+  };
+}
+
+// En-passant capture: advance the pawn to the empty target and remove the pawn on
+// `pawnSquare`, which then enters the normal placement/chain mechanic. The victim
+// is verified to be an opposing pawn rather than trusted from stored state.
+function applyEnPassant(
+  state: GameState,
+  board: BoardId,
+  from: number,
+  to: number,
+  pawnSquare: number,
+): GameState {
+  // The captured pawn must sit on the file of the target square, exactly one rank
+  // "behind" it relative to the capturer's direction of travel — i.e. the square an
+  // opponent double-stepping pawn would occupy. Verifying the geometry (not just
+  // "some opposing pawn exists") makes a malformed state fail at the invariant.
+  const dir = state.turn === "white" ? 1 : -1;
+  const expectedPawnSquare = idx(fileOf(to), rankOf(to) - dir);
+  const victim = state.boards[board][pawnSquare];
+  if (
+    pawnSquare !== expectedPawnSquare ||
+    !victim ||
+    victim.type !== "pawn" ||
+    victim.color === state.turn
+  ) {
+    throw new Error(
+      `en-passant invariant violated: expected an opposing pawn on board ${board} at ${squareToAlgebraic(expectedPawnSquare)}`,
+    );
+  }
+
+  const boards = cloneBoards(state);
+  boards[board][to] = boards[board][from];
+  boards[board][from] = null;
+  boards[board][pawnSquare] = null;
+
+  return enterCaptureResolution(state.turn, boards, state.kingCaptures, board, {
+    type: victim.type,
+    color: victim.color,
+  });
+}
+
+// Arms the en-passant right iff this move was a pawn double-step; null otherwise.
+function doubleStepEnPassant(
+  board: BoardId,
+  from: number,
+  to: number,
+  mover: Piece,
+): EnPassant | null {
+  if (mover.type !== "pawn") return null;
+  const dir = mover.color === "white" ? 1 : -1;
+  const homeRank = mover.color === "white" ? 1 : 6;
+  if (
+    rankOf(from) === homeRank &&
+    fileOf(from) === fileOf(to) &&
+    rankOf(to) === rankOf(from) + 2 * dir
+  ) {
+    return { board, square: idx(fileOf(from), rankOf(from) + dir), pawnSquare: to };
+  }
+  return null;
 }
 
 export function applyMove(state: GameState, move: Move): GameState {
@@ -222,54 +414,75 @@ export function applyMove(state: GameState, move: Move): GameState {
       `piece on board ${board} at ${squareToAlgebraic(from)} is not ${state.turn}'s`,
     );
   }
-  if (!legalDestinations(state.boards[board], from).includes(to)) {
+  const epTarget = epTargetFor(state, board);
+  if (!legalDestinations(state.boards[board], from, epTarget).includes(to)) {
     throw new IllegalMoveError(
       "ILLEGAL_DESTINATION",
       `${squareToAlgebraic(from)}->${squareToAlgebraic(to)} on board ${board} is not a legal move`,
     );
   }
 
+  // Promotion validity is resolved BEFORE any mutation. Only a pawn landing on its
+  // last rank may carry a `promotion` — and it MUST. This same guard rejects a
+  // stray `promotion` on castling / en-passant / non-pawn moves.
+  const isPromotion = mover.type === "pawn" && rankOf(to) === promotionRank(mover.color);
+  if (move.promotion !== undefined && !isPromotion) {
+    throw new IllegalMoveError(
+      "INVALID_PROMOTION",
+      `promotion is only legal when a pawn reaches its last rank (got ${squareToAlgebraic(from)}->${squareToAlgebraic(to)})`,
+    );
+  }
+  if (isPromotion && !isPromotionPiece(move.promotion)) {
+    throw new IllegalMoveError(
+      "INVALID_PROMOTION",
+      `a pawn reaching its last rank must promote to knight|bishop|rook|queen (got ${String(move.promotion)})`,
+    );
+  }
+
+  // Castling: the only two-file king move, generated by movement.ts only when it is
+  // legal. It relocates the rook and never captures, so the turn simply flips.
+  if (
+    mover.type === "king" &&
+    from === idx(4, mover.color === "white" ? 0 : 7) &&
+    Math.abs(fileOf(to) - fileOf(from)) === 2
+  ) {
+    return applyCastle(state, board, from, to, mover.color);
+  }
+
+  // En passant: a pawn moving diagonally onto the empty target square an opponent
+  // pawn just double-stepped over. The captured pawn sits on `pawnSquare`, which is
+  // NOT the destination.
+  if (
+    mover.type === "pawn" &&
+    state.enPassant !== null &&
+    state.enPassant.board === board &&
+    to === state.enPassant.square &&
+    state.boards[board][to] === null
+  ) {
+    return applyEnPassant(state, board, from, to, state.enPassant.pawnSquare);
+  }
+
   const boards = cloneBoards(state);
   const captured = boards[board][to];
-  boards[board][to] = boards[board][from];
+  // On a promoting move the pawn becomes the chosen piece on arrival; any captured
+  // occupant is still the piece that travels to the other board.
+  boards[board][to] = isPromotion
+    ? { type: move.promotion as PromotionPiece, color: mover.color }
+    : boards[board][from];
   boards[board][from] = null;
 
   if (!captured) {
+    // A non-capturing pawn double-step — and only that — arms the en-passant right.
     return {
       boards,
       turn: opponent(state.turn),
       kingCaptures: { ...state.kingCaptures },
+      enPassant: doubleStepEnPassant(board, from, to, mover),
       phase: { kind: "awaitingMove" },
     };
   }
 
-  // A capture occurred. King-win is checked at the capture event, before any
-  // placement / chain bookkeeping.
-  const kingCaptures = { ...state.kingCaptures };
-  if (captured.type === "king") {
-    kingCaptures[captured.color] += 1;
-    if (kingCaptures[captured.color] >= 2) {
-      return {
-        boards,
-        turn: state.turn,
-        kingCaptures,
-        phase: {
-          kind: "gameOver",
-          outcome: { result: "win", winner: opponent(captured.color), reason: "kingCaptured" },
-        },
-      };
-    }
-  }
-
-  // The captured piece travels to the other board and must be placed there.
-  const pending: PendingPlacement = {
-    piece: { type: captured.type, color: captured.color },
-    board: otherBoard(board),
-    visited: [],
-  };
-  pending.visited.push(chainSignature(boards, kingCaptures, state.turn, pending));
-
-  return { boards, turn: state.turn, kingCaptures, phase: { kind: "awaitingPlacement", pending } };
+  return enterCaptureResolution(state.turn, boards, state.kingCaptures, board, captured);
 }
 
 export function applyPlacement(state: GameState, square: number): GameState {
@@ -282,6 +495,13 @@ export function applyPlacement(state: GameState, square: number): GameState {
 
   if (!isSquare(square)) {
     throw new IllegalPlacementError("INVALID_SQUARE", `square out of range: ${square}`);
+  }
+
+  // Invariant: a placement chain is only ever entered from a capture, which clears
+  // the en-passant right. So `enPassant` is always null here, and need not appear in
+  // `chainSignature`. If this ever fires, EP must be folded into the signature.
+  if (state.enPassant !== null) {
+    throw new Error("invariant violated: enPassant must be null during a placement chain");
   }
 
   const pending = state.phase.pending;
@@ -305,6 +525,7 @@ export function applyPlacement(state: GameState, square: number): GameState {
       boards,
       turn: opponent(state.turn),
       kingCaptures: { ...state.kingCaptures },
+      enPassant: null,
       phase: { kind: "awaitingMove" },
     };
   }
@@ -319,6 +540,7 @@ export function applyPlacement(state: GameState, square: number): GameState {
         boards,
         turn: state.turn,
         kingCaptures,
+        enPassant: null,
         phase: {
           kind: "gameOver",
           outcome: { result: "win", winner: opponent(occupant.color), reason: "kingCaptured" },
@@ -342,6 +564,7 @@ export function applyPlacement(state: GameState, square: number): GameState {
       boards,
       turn: state.turn,
       kingCaptures,
+      enPassant: null,
       phase: { kind: "gameOver", outcome: { result: "draw", reason: "infiniteLoop" } },
     };
   }
@@ -359,6 +582,7 @@ export function applyPlacement(state: GameState, square: number): GameState {
     boards,
     turn: state.turn,
     kingCaptures,
+    enPassant: null,
     phase: { kind: "awaitingPlacement", pending: nextPending },
   };
 }

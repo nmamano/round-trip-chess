@@ -14,8 +14,9 @@ to do next.
 ## 0. Current status (what exists)
 
 - On `master` (see `git log`): the pure `shared/` rules engine + tests, with
-  infinite-loop scored as a **draw** (see §2.3).
-- `bun run ci` is **green**: prettier + eslint + tsc + 46 tests / 334 assertions.
+  infinite-loop scored as a **draw** (see §2.3) **and castling / en passant /
+  promotion now built** (the §3 engine slice — see §2.7).
+- `bun run ci` is **green**: prettier + eslint + tsc + 79 tests / 438 assertions.
 - Run it: `cd ~/nil/round-trip-chess && bun install && bun run ci`.
 
 Files:
@@ -23,13 +24,16 @@ Files:
 - `shared/board.ts` — board model (`idx = rank*8 + file`, a1 = 0), square↔algebraic
   helpers, `STARTING_SQUARES[type][color]` (the PROMPT §4 placement table),
   `initialBoard`/`emptyBoard`/`cloneBoard`.
-- `shared/movement.ts` — pure per-piece pseudo-legal geometry. **Geometry only:
-  no check / king-safety / pins** (permanent — king-capture variant). Castling /
-  en passant / promotion are NOT here yet (see §2).
-- `shared/engine.ts` — the turn state machine and public API (see §1).
+- `shared/movement.ts` — pure per-piece pseudo-legal geometry **plus castling and
+  en-passant generation** (both position-derived; EP via an `enPassantTarget`
+  param). **Still no check / king-safety / pins** (permanent — king-capture
+  variant); castling is the no-check variant (§2.7).
+- `shared/engine.ts` — the turn state machine and public API (see §1); now also
+  resolves castling, en passant, and atomic promotion.
 - `shared/config.ts` — tunables + `MAX_CHAIN_ITERATIONS` (assertion ceiling).
 - `tests/` — per-piece movement truth tables + scripted engine scenarios
-  (chains, king round-trip, infinite loop, phase guards, boundary errors).
+  (chains, king round-trip, infinite loop, phase guards, boundary errors) +
+  `castling` / `enpassant` / `promotion` feature suites.
 
 ---
 
@@ -38,9 +42,9 @@ Files:
 ```ts
 initialState(): GameState
 legalMovesFrom(state, board, from): number[]      // side-to-move + awaitingMove only
-allLegalMoves(state): Move[]                       // for a random-legal bot / tests
+allLegalMoves(state): Move[]                       // bot/tests; promoting pawn moves expand to Q/R/B/N
 placementOptions(state): number[]                  // derived from pending piece
-applyMove(state, move): GameState                  // move = { board, from, to }
+applyMove(state, move): GameState                  // move = { board, from, to, promotion? }
 applyPlacement(state, square): GameState
 ```
 
@@ -51,11 +55,15 @@ GameState = {
   boards: [Board, Board];                 // Board 0 = standard, Board 1 = empty
   turn: Color;                            // "white" | "black"
   kingCaptures: { white: number; black: number };
+  enPassant: EnPassant | null;            // armed only by a double-step; null in any chain
   phase:
     | { kind: "awaitingMove" }
     | { kind: "awaitingPlacement"; pending: { piece, board, visited } }
     | { kind: "gameOver"; outcome: Outcome };
 }
+
+// move.promotion?: "knight" | "bishop" | "rook" | "queen"  (required iff a pawn lands on its last rank)
+EnPassant = { board: BoardId; square: number; pawnSquare: number };
 
 Outcome =
   | { result: "win"; winner: Color; reason: "kingCaptured" }
@@ -63,9 +71,11 @@ Outcome =
 ```
 
 Errors: `IllegalMoveError` (`WRONG_PHASE | INVALID_BOARD | INVALID_SQUARE |
-NO_PIECE | WRONG_OWNER | ILLEGAL_DESTINATION`) and `IllegalPlacementError`
-(`WRONG_PHASE | INVALID_SQUARE | ILLEGAL_SQUARE`). The engine throws on illegal
-input; the server pre-validates and maps these to protocol errors.
+NO_PIECE | WRONG_OWNER | ILLEGAL_DESTINATION | INVALID_PROMOTION`) and
+`IllegalPlacementError` (`WRONG_PHASE | INVALID_SQUARE | ILLEGAL_SQUARE`). The
+engine throws on illegal input; the server pre-validates and maps these to protocol
+errors. (`enPassant` is authoritative state; like `pending.visited` decide
+deliberately what the client snapshot needs — the EP target is public info.)
 
 `pending.visited` is **internal** chain loop-detection metadata — must NOT be
 projected into the client-facing snapshot.
@@ -99,6 +109,24 @@ reason: "infiniteLoop" }` — never overloading `winner`. (PROMPT §2 still read
    correct.
 6. Indexing `a1 = 0`, `idx = rank*8 + file`. No chess library — the variant
    rules are ours in `shared/`.
+7. **Castling / en passant / promotion (engine slice — built & peer-reviewed).**
+   - **Castling carries NO check restrictions** (confirmed by Nil): a king may
+     castle out of, through, or onto an attacked square — exactly as a normal king
+     may step into one, because there is **no check/checkmate concept anywhere** in
+     this variant (see §2 / PROMPT §2). _Structurally_-illegal castling is still
+     fully rejected: king must be on its color's home square, a **same-color** rook
+     on the matching a/h home square on the **same board**, all intervening squares
+     empty; castling never captures. Stateless — the right revives whenever the home
+     positions are recreated (no move history), matching the pawn double-step.
+   - **En passant** is **same-board and immediate**: `enPassant {board, square,
+pawnSquare}` is armed ONLY by a pawn double-step and cleared by the very next
+     move, so it is always null during a placement chain (asserted) and therefore
+     excluded from `chainSignature`. An EP capture removes the pawn on `pawnSquare`
+     (≠ destination), which then enters the normal placement/chain mechanic.
+   - **Promotion** is **atomic on the move** (`move.promotion?: Exclude<PieceType,
+"pawn" | "king">`), resolved inside `applyMove`. A promoting capture promotes
+     the pawn on its origin board and routes the captured piece to the other board.
+     Placement never promotes (pawns are only ever placed on rank 2/7).
 
 ---
 
@@ -237,9 +265,14 @@ increments staging only your own changes; do NOT modify `~/nil/rps-roulette`.
 ## 8. Open questions to confirm with Nil before/while building §3
 
 _Resolved by Nil: infinite loop = **draw** (implemented, §2.3); board library =
-**whatever works best** (driver's call, §5)._
+**whatever works best** (driver's call, §5). The two castling/promotion questions
+below are now also **resolved** (see §2.7) — no open questions remain for the engine
+slice._
 
-1. **Stateless castling** (position-keyed, no move history) — acceptable, matching
-   the pawn double-step precedent? (Reviewer: yes.)
-2. **Promotion** — atomic `move.promotion` (reviewer-recommended) vs an explicit
-   `awaitingPromotion` phase; confirm the piece-choice UX with two boards.
+1. ~~**Stateless castling** (position-keyed, no move history) — acceptable?~~
+   **Resolved (Nil):** yes — and confirmed to carry **NO check/through-check/
+   into-check restrictions**, consistent with kings moving into attacked squares
+   elsewhere in the variant. Structurally-illegal castling is still rejected. (§2.7)
+2. ~~**Promotion** — atomic `move.promotion` vs an explicit `awaitingPromotion`
+   phase~~ — **Resolved (Nil):** atomic `move.promotion`, resolved in `applyMove`;
+   the UI prompts for the piece before sending the move. (§2.7)

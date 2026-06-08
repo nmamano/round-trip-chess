@@ -9,11 +9,20 @@
 // checkmate): check, king safety, and pins. Kings may move into and along
 // attacked lines — you win by actually capturing the king.
 //
-// NOT YET implemented but IN SCOPE per Nil (planned next — see HANDOFF-NEXT.md):
-// castling, en passant, and promotion. Each needs deliberate design for the
-// two-board variant (e.g. castling has no "through check" rule here; promotion
-// interacts with the capture->placement mechanic). Until then this module is
-// plain pseudo-legal geometry.
+// Castling and en passant are generated HERE so a single source of truth feeds
+// both `legalMovesFrom` and `applyMove`'s validation:
+//   - Castling (no-check variant): a king on its home square with a same-color
+//     rook on the matching a/h home square and an empty path gains the two-square
+//     target (g/c file). NO check / through-check / into-check rules — kings may
+//     castle through or into attacked squares. No capture by castling. Because it
+//     is purely position-derived, castling "rights" revive whenever the home
+//     positions are recreated (consistent with the stateless pawn double-step).
+//   - En passant needs one bit of out-of-board state (the target square passed
+//     over by an opponent double-step), threaded in via `enPassantTarget`. The
+//     engine board-filters it so this module only ever sees a same-board square.
+//
+// Promotion is NOT a geometry concern: a promoting pawn's destination squares are
+// the ordinary last-rank squares; the engine transforms the piece on arrival.
 //
 // "Legal" here means geometrically legal for the piece on `from`; the engine
 // layer enforces side-to-move and resolves captures.
@@ -54,20 +63,30 @@ const KING_OFFSETS: readonly Offset[] = [...ROOK_DIRS, ...BISHOP_DIRS];
 
 // Returns the geometrically legal destination squares for the piece on `from`,
 // sorted ascending for deterministic output. Empty if `from` is empty.
-export function legalDestinations(board: Board, from: number): number[] {
+//
+// `enPassantTarget` is the en-passant capture square for THIS board (the square a
+// just-double-stepped opponent pawn passed over), or null. The engine board-filters
+// it before calling, so a non-null value is always same-board.
+export function legalDestinations(
+  board: Board,
+  from: number,
+  enPassantTarget: number | null = null,
+): number[] {
   const piece = board[from];
   if (!piece) return [];
 
   let dests: number[];
   switch (piece.type) {
     case "pawn":
-      dests = pawnDestinations(board, from, piece);
+      dests = pawnDestinations(board, from, piece, enPassantTarget);
       break;
     case "knight":
       dests = stepDestinations(board, from, piece, KNIGHT_OFFSETS);
       break;
     case "king":
-      dests = stepDestinations(board, from, piece, KING_OFFSETS);
+      dests = stepDestinations(board, from, piece, KING_OFFSETS).concat(
+        castlingDestinations(board, from, piece),
+      );
       break;
     case "bishop":
       dests = slideDestinations(board, from, piece, BISHOP_DIRS);
@@ -134,7 +153,12 @@ function slideDestinations(
   return out;
 }
 
-function pawnDestinations(board: Board, from: number, piece: Piece): number[] {
+function pawnDestinations(
+  board: Board,
+  from: number,
+  piece: Piece,
+  enPassantTarget: number | null,
+): number[] {
   const f = fileOf(from);
   const r = rankOf(from);
   const dir = piece.color === "white" ? 1 : -1;
@@ -151,13 +175,48 @@ function pawnDestinations(board: Board, from: number, piece: Piece): number[] {
     }
   }
 
-  // Diagonal captures (opponent only). No en passant.
+  // Diagonal captures: an opponent piece, OR (en passant) the empty target square
+  // an opponent pawn just double-stepped over. The engine has already confirmed
+  // `enPassantTarget` belongs to this board.
   for (const df of [-1, 1]) {
     const nf = f + df;
     const nr = r + dir;
     if (!inBounds(nf, nr)) continue;
-    const occ = board[idx(nf, nr)];
-    if (occ && occ.color !== piece.color) out.push(idx(nf, nr));
+    const to = idx(nf, nr);
+    const occ = board[to];
+    if (occ) {
+      if (occ.color !== piece.color) out.push(to);
+    } else if (enPassantTarget !== null && to === enPassantTarget) {
+      out.push(to);
+    }
+  }
+
+  return out;
+}
+
+// Castling (no-check variant), purely position-derived. A king on its home square
+// (e1/e8) with a SAME-COLOR rook on the matching a/h home square on this board and
+// an empty path gains the two-square king target. There is no check / through-check
+// / into-check restriction here, and castling never captures (the path is empty).
+function castlingDestinations(board: Board, from: number, piece: Piece): number[] {
+  if (piece.type !== "king") return [];
+  const backRank = piece.color === "white" ? 0 : 7;
+  if (from !== idx(4, backRank)) return []; // king must be on its home square
+  const out: number[] = [];
+
+  const sameColorRook = (square: number): boolean => {
+    const cell = board[square];
+    return cell !== null && cell.type === "rook" && cell.color === piece.color;
+  };
+  const empty = (file: number): boolean => board[idx(file, backRank)] === null;
+
+  // Kingside: h-rook, f & g empty, king -> g (file 6).
+  if (sameColorRook(idx(7, backRank)) && empty(5) && empty(6)) {
+    out.push(idx(6, backRank));
+  }
+  // Queenside: a-rook, b, c & d empty, king -> c (file 2).
+  if (sameColorRook(idx(0, backRank)) && empty(1) && empty(2) && empty(3)) {
+    out.push(idx(2, backRank));
   }
 
   return out;
