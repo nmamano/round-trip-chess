@@ -1,0 +1,8 @@
+**/dist/
+**/node_modules/
+bun.lock
+
+# Pre-existing spec docs — owned by Nil, left as-authored.
+HANDOFF.md
+PROMPT.md
+README.md
