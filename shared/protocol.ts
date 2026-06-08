@@ -14,7 +14,7 @@ export type LobbyPhase = "waiting" | "active";
 
 export interface PlayerView {
   id: PlayerId;
-  color: Color; // p1 is always White (creator, moves first); p2 is Black.
+  color: Color; // The side this player holds THIS game; alternates each New Game (p1 is White for game 1).
   name: string;
   connected: boolean;
 }

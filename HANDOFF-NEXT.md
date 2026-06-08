@@ -1,8 +1,8 @@
 # Round-Trip Chess — Hand-Off for the Next Session
 
-You are continuing the build of **Round-Trip Chess**. The pure rules engine AND
-the server are now done and committed; your job is to (A) build the **frontend**,
-then (B) **deploy** to fly.io and play a real match across two devices.
+You are continuing the build of **Round-Trip Chess**. The rules engine, the
+server, AND the frontend are now done and committed; your job is to **deploy** to
+fly.io and play a real match across two devices.
 
 **`PROMPT.md` is the authoritative game spec** and wins any rules conflict (flag
 conflicts to Nil rather than guessing). `HANDOFF.md` is the original end-to-end
@@ -21,12 +21,20 @@ On `master` (see `git log`):
 - The **server slice** (commit "Add server slice: online multiplayer over
   WebSocket") — server-authoritative, in-memory, create/join by code, reconnect
   by token, over Bun + Hono + WebSocket, mirroring `~/nil/rps-roulette`.
-- `bun run ci` is **green**: prettier + eslint + tsc + **110 tests / 561
-  assertions**.
-- Run it: `cd ~/nil/round-trip-chess && bun install && bun run ci`.
-- Run the server: `bun run dev` (hot) → `http://localhost:3000`, WS at `/ws`,
-  health at `/health`. There is **no frontend yet** (`/` returns placeholder
-  text).
+- The **frontend slice** (`frontend/`, Vite + React 19 + TS): a pure projection
+  of `RoomSnapshot` (lobby with create/join by code and `?room=` links,
+  two-board click-to-move, placement + promotion pickers, turn + king status,
+  rules panel, win/draw banners, reconnect-by-code). Server stays authoritative;
+  the browser-safe engine drives advisory move highlights only. New Game
+  alternates colors (see §7.7). `server/index.ts` serves the built `frontend/dist`.
+- `bun run ci` is **green**: prettier + eslint + tsc (root + frontend), **111
+  tests / 572 assertions**, plus the Vite build.
+- Run it: `cd ~/nil/round-trip-chess && bun install && (cd frontend && bun install)
+&& bun run ci`.
+- Run the server (serves the built SPA): `bun run build`, then `bun run dev`
+  (hot) → `http://localhost:3000`, WS at `/ws`, health at `/health`. For live
+  frontend dev with HMR, run `bun --cwd=frontend run dev` (Vite proxies `/ws` and
+  `/health` to :3000).
 
 Files:
 
@@ -245,8 +253,10 @@ Server slice:
    snapshot broadcast to both. `you`/`color`/`token` only in `joined`.
 6. **No gameplay clock** — the only timer is reconnect-grace; no
    round/version/stale-timer machinery.
-7. **Fixed colors** — creator = White (moves first), joiner = Black. _(Confirm
-   with Nil if you want randomized sides — see §8.)_
+7. **Colors alternate each New Game.** The creator (p1) is White for game 1;
+   every New Game swaps which player holds White (so the other player moves first
+   next game). Color is per-game `Match` state surfaced in the snapshot; player
+   ids and reconnect tokens never change.
 8. **`newGame`** allowed only once a game is over, **unilaterally** by either
    player (no abort/rematch mid-game). _(Confirm if you want a both-agree
    handshake — see §8.)_
@@ -259,7 +269,7 @@ Server slice:
 
 ## 8. Open questions to confirm with Nil (frontend/deploy)
 
-1. **Color assignment** — fixed creator=White (current) vs randomized sides?
+1. ~~Color assignment~~ **Resolved:** colors alternate each New Game (see §7.7).
 2. **`newGame`** — unilateral (current) vs both-players-agree?
 3. **Move clock** — none (current). Add an optional per-move timer, or leave out
    of scope for MVP (PROMPT §6/§7)?

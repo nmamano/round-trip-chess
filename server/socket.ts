@@ -11,7 +11,6 @@ import { createBunWebSocket } from "hono/bun";
 import type { Hono } from "hono";
 import type { WSContext } from "hono/ws";
 import { type Connection, type Room, RoomStore } from "./rooms";
-import { colorOf } from "./match";
 import type { ClientMsg, PlayerId } from "../shared/protocol";
 import type { BoardId } from "../shared/board";
 import type { Move, PromotionPiece } from "../shared/engine";
@@ -88,7 +87,7 @@ export function registerSocket(app: Hono, store: RoomStore) {
               t: "joined",
               code: room.code,
               you: pid,
-              color: colorOf(pid),
+              color: room.colorOf(pid),
               token,
               state: room.snapshot(),
             });
@@ -117,7 +116,7 @@ export function registerSocket(app: Hono, store: RoomStore) {
               t: "joined",
               code: room.code,
               you: res.pid,
-              color: colorOf(res.pid),
+              color: room.colorOf(res.pid),
               token: res.token,
               state: room.snapshot(),
             });
@@ -155,7 +154,7 @@ export function registerSocket(app: Hono, store: RoomStore) {
               t: "joined",
               code: room.code,
               you: res.pid,
-              color: colorOf(res.pid),
+              color: room.colorOf(res.pid),
               token: msg.token,
               state: room.snapshot(),
             });

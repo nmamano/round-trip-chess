@@ -7,11 +7,12 @@
     "start": "bun run server/index.ts",
     "dev": "bun run --hot server/index.ts",
     "test": "bun test tests/",
+    "build": "bun --cwd=frontend run build",
     "format": "bun x prettier --write .",
     "format:check": "bun x prettier --check .",
     "lint": "bun x eslint .",
-    "typecheck": "bun x tsc --noEmit -p tsconfig.json",
-    "ci": "bun x prettier --check . && bun x eslint . && bun run typecheck && bun test tests/"
+    "typecheck": "bun x tsc --noEmit -p tsconfig.json && bun --cwd=frontend x tsc --noEmit",
+    "ci": "bun x prettier --check . && bun x eslint . && bun run typecheck && bun test tests/ && bun run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

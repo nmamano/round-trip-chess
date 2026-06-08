@@ -7,7 +7,8 @@
 // clears the grace timer or no-ops safely when the slot's socket was replaced.
 
 import { customAlphabet } from "nanoid";
-import { Match, waitingSnapshot, type MatchPlayer } from "./match";
+import { Match, waitingSnapshot, colorOf, type MatchPlayer } from "./match";
+import type { Color } from "../shared/board";
 import {
   RECONNECT_GRACE_MS,
   CODE_LENGTH,
@@ -199,6 +200,15 @@ export class Room {
   }
 
   // ---- snapshots / broadcast -------------------------------------------
+
+  /**
+   * The color a player holds in the CURRENT game. Delegates to the match (colors
+   * alternate each New Game); before a match exists (waiting), the creator is
+   * White by the static default.
+   */
+  colorOf(pid: PlayerId): Color {
+    return this.match ? this.match.colorOf(pid) : colorOf(pid);
+  }
 
   snapshot(): RoomSnapshot {
     if (!this.match) return waitingSnapshot(this.code, this.slots.p1!.player);

@@ -151,6 +151,36 @@ describe("Match — game over + new game", () => {
     expect(m.newGame()).toBe(false); // no longer over
   });
 
+  test("New Game alternates colors: whoever was Black plays White the next game", () => {
+    // Seed a position one capture from a White win, then win to reach gameOver.
+    const boards = emptyBoards();
+    put(boards[0], "a1", pc("white", "rook"));
+    put(boards[0], "b1", pc("black", "king"));
+    const m = new Match(players(), stateFrom(boards, "white", { white: 0, black: 1 }));
+
+    // Game 1: p1 = White, p2 = Black.
+    expect(m.colorOf("p1")).toBe("white");
+    expect(m.colorOf("p2")).toBe("black");
+    expect(m.move("p1", { board: 0, from: sq("a1"), to: sq("b1") }).ok).toBe(true);
+    expect(m.isOver()).toBe(true);
+
+    // New Game flips the colors and resets to a fresh, White-to-move opening.
+    expect(m.newGame()).toBe(true);
+    expect(m.colorOf("p1")).toBe("black");
+    expect(m.colorOf("p2")).toBe("white");
+
+    const s = m.snapshot("ABCD");
+    expect(s.turn).toBe("white"); // White still moves first...
+    expect(s.players).toEqual([
+      { id: "p1", color: "black", name: "Alice", connected: true },
+      { id: "p2", color: "white", name: "Bob", connected: true },
+    ]);
+
+    // ...so p2 now holds White and moves first; p1 acting first is rejected.
+    expect(m.move("p1", { board: 0, from: sq("d7"), to: sq("d5") }).ok).toBe(false);
+    expect(m.move("p2", { board: 0, from: sq("e2"), to: sq("e4") }).ok).toBe(true);
+  });
+
   test("an infinite-loop chain ends as a draw, surfaced in the snapshot", () => {
     // A chain that reproduces a configuration => draw (the resolver keeps the
     // turn across the whole chain, so White makes every placement).

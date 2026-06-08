@@ -35,7 +35,10 @@ export interface MatchPlayer {
   connected: boolean;
 }
 
-// p1 is always White (the creator, who moves first); p2 is always Black.
+// The first-game color mapping: the creator (p1) is White and moves first.
+// Colors then ALTERNATE every New Game (see Match.newGame), so the live mapping
+// comes from Match.colorOf / Room.colorOf. This static default only seeds game 1
+// and the pre-match waiting snapshot.
 export function colorOf(pid: PlayerId): Color {
   return pid === "p1" ? "white" : "black";
 }
@@ -86,6 +89,10 @@ function cloneState(s: GameState): GameState {
 
 export class Match {
   private state: GameState;
+  // Which player holds White THIS game. Starts as p1 (the creator) and flips on
+  // every New Game so the two players alternate colors across games. Player
+  // identities (p1/p2) and reconnect tokens never change.
+  private whitePid: PlayerId = "p1";
 
   // `initial` is primarily a test/seed seam (drive chain/gameOver positions
   // directly). The engine validates every subsequent transition regardless, so
@@ -99,7 +106,7 @@ export class Match {
   }
 
   colorOf(pid: PlayerId): Color {
-    return colorOf(pid);
+    return pid === this.whitePid ? "white" : "black";
   }
 
   get phaseKind(): GameState["phase"]["kind"] {
@@ -112,7 +119,7 @@ export class Match {
 
   /** Apply a move for `pid`. Turn ownership is checked before the engine runs. */
   move(pid: PlayerId, move: Move): ActionResult {
-    if (colorOf(pid) !== this.state.turn) {
+    if (this.colorOf(pid) !== this.state.turn) {
       return fail("not_your_turn", "It is not your turn.");
     }
     try {
@@ -131,7 +138,7 @@ export class Match {
    * so the resolver is still `state.turn` — the same ownership rule as `move`.
    */
   place(pid: PlayerId, square: number): ActionResult {
-    if (colorOf(pid) !== this.state.turn) {
+    if (this.colorOf(pid) !== this.state.turn) {
       return fail("not_your_turn", "It is not your turn.");
     }
     try {
@@ -151,6 +158,9 @@ export class Match {
    */
   newGame(): boolean {
     if (this.state.phase.kind !== "gameOver") return false;
+    // Alternate colors each game: whoever was Black now plays White (and moves
+    // first). Player identities (p1/p2) and tokens are unchanged.
+    this.whitePid = this.whitePid === "p1" ? "p2" : "p1";
     this.state = initialState();
     return true;
   }
@@ -176,7 +186,7 @@ export class Match {
   private playerViews(): PlayerView[] {
     return (["p1", "p2"] as const).map((id) => ({
       id,
-      color: colorOf(id),
+      color: this.colorOf(id),
       name: this.players[id].name,
       connected: this.players[id].connected,
     }));

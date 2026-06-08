@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+/* Font + radius scale tokens (Tailwind utilities read these). */
+@theme {
+  --font-heading: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.5rem;
+}
+
+/* Map Tailwind color utilities (bg-card, text-win, …) onto the raw vars below. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-win: var(--win);
+  --color-lose: var(--lose);
+}
+
+/* Raw design tokens. Board square colors are the classic cream/fern palette;
+   components reference some vars directly (shadows, board squares). */
+:root {
+  color-scheme: light;
+  --background: #f3f4ee;
+  --foreground: #2a2d23;
+  --card: #ffffff;
+  --card-foreground: #2a2d23;
+  --primary: #4f7942;
+  --primary-foreground: #ffffff;
+  --secondary: #e6e8db;
+  --secondary-foreground: #3a3d31;
+  --muted: #e9eadf;
+  --muted-foreground: #6b6f5e;
+  --accent: #f6c453;
+  --accent-foreground: #3a2f10;
+  --border: #d6d8c6;
+  --input: #d6d8c6;
+  --ring: #4f7942;
+  --win: #2f9e54;
+  --lose: #c2410c;
+
+  /* Board-specific tokens. */
+  --sq-light: #eeeed2;
+  --sq-dark: #769656;
+  --sq-sel: #f6c453;
+  --sq-move: rgba(30, 32, 44, 0.45);
+  --sq-place: rgba(245, 158, 11, 0.5);
+  --sq-place-ring: #b45309;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+}
