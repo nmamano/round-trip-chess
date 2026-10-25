@@ -4,7 +4,7 @@
 // capture→placement chain, reconnect-by-token, opponent-left, and join errors.
 
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
-import app from "../server/index.ts";
+import { handlers as app } from "../server/index.ts";
 import type { ClientMsg, ServerMsg } from "../shared/protocol";
 import { sq } from "./helpers";
 
@@ -240,5 +240,15 @@ describe("integration (real WS)", () => {
     p1.close();
     p2.close();
     c.close();
+  });
+
+  test("a frame over the size limit closes the socket", async () => {
+    const ws = new WebSocket(WS_URL);
+    await new Promise((r) => ws.addEventListener("open", r));
+    const closed = new Promise<number>((r) => ws.addEventListener("close", (e) => r(e.code)));
+    ws.send("x".repeat(100 * 1024));
+    // Bun 1.4 sends close code 1009. Bun 1.3.11 (the Dockerfile pin) drops the
+    // connection without a close frame, so the client sees 1006.
+    expect([1006, 1009]).toContain(await closed);
   });
 });

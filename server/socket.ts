@@ -17,6 +17,11 @@ import type { Move, PromotionPiece } from "../shared/engine";
 
 const { upgradeWebSocket, websocket } = createBunWebSocket();
 
+// Real messages are tiny (names are capped at MAX_NAME_LENGTH). Bun's default
+// frame limit is 16 MiB, and a few frames of that size grow the process past
+// 100 MiB, so Bun closes a bigger frame with code 1009.
+const MAX_FRAME_BYTES = 64 * 1024;
+
 const isInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n);
 const isBoardId = (n: unknown): n is BoardId => n === 0 || n === 1;
 const isPromotion = (p: unknown): p is PromotionPiece =>
@@ -232,5 +237,5 @@ export function registerSocket(app: Hono, store: RoomStore) {
     }),
   );
 
-  return websocket;
+  return { ...websocket, maxPayloadLength: MAX_FRAME_BYTES };
 }
